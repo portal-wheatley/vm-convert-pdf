@@ -1,0 +1,5 @@
+.claude/
+result
+result-*
+__pycache__/
+*.egg-info/
