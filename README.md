@@ -48,11 +48,6 @@ Or add it to your system flake:
 An overlay is also exported as `overlays.default`, providing
 `pkgs.vm-convert-pdf`.
 
-While the repository is private, Nix needs a GitHub token to fetch it: add
-`access-tokens = github.com=<token>` to `nix.conf`, or use a
-`git+ssh://git@github.com/portal-wheatley/vm-convert-pdf` URL with an SSH
-key that has access.
-
 Tested on x86_64-linux. The flake also builds for aarch64-linux, but the VM
 has not been booted there yet.
 
