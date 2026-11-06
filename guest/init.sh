@@ -30,14 +30,24 @@ finish() {
 
 die() {
   echo "vm-convert-pdf guest: $*" >&2
-  [ -n "$port" ] && echo ERROR >&3
-  finish
+  # The serial console transmits asynchronously; give it time to drain so
+  # the host captures the reason before it kills or loses the VM.
+  sleep 1
+  if [ -n "$port" ]; then
+    echo ERROR >&3
+    finish
+  fi
+  poweroff -f
 }
 
+# The virtio drivers are loadable modules on some kernels (x86_64) and built
+# in on others (aarch64), where modprobe fails because the trimmed module
+# tree does not list them. So a failed modprobe is not fatal: the device
+# checks below catch a driver that is really missing.
 mkdir -p /lib
 ln -s @modules@/lib/modules /lib/modules
 for m in virtio_pci virtio_blk virtio_console; do
-  modprobe "$m" || die "modprobe $m failed"
+  modprobe "$m" 2>/dev/null || true
 done
 
 dpi=150
@@ -51,19 +61,19 @@ case "$dpi" in
 esac
 
 # devtmpfs creates the device nodes; without udev we resolve the port by name.
-for _ in 1 2 3 4 5 6 7 8 9 10; do
+found=
+for _ in $(seq 50); do
   for p in /sys/class/virtio-ports/*; do
     [ -e "$p/name" ] || continue
-    [ "$(cat "$p/name")" = out ] && port="/dev/${p##*/}"
+    [ "$(cat "$p/name")" = out ] && found="/dev/${p##*/}"
   done
-  [ -n "$port" ] && [ -e "$port" ] && break
-  port=
-  sleep 0.2
+  [ -n "$found" ] && [ -e "$found" ] && [ -b /dev/vda ] && break
+  found=
+  sleep 0.1
 done
-[ -n "$port" ] || die "output port not found"
+[ -n "$found" ] || die "output port or input disk not found (virtio drivers missing?)"
+port=$found
 exec 3>"$port"
-
-[ -b /dev/vda ] || die "input disk not found"
 len=$(head -c 512 /dev/vda | head -n 1)
 case "$len" in
   ''|*[!0-9]*) die "bad input header" ;;

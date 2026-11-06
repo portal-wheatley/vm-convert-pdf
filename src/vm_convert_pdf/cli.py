@@ -8,6 +8,7 @@ then builds a new PDF out of those images. Nothing from the original file
 """
 
 import argparse
+import collections
 import ctypes
 import os
 import platform
@@ -29,6 +30,8 @@ from . import protocol
 SECTOR = 512
 CONNECT_TIMEOUT = 30
 PR_SET_PDEATHSIG = 1
+CONSOLE_TAIL = 15
+CONSOLE_LINE_MAX = 512
 
 
 class ConversionError(Exception):
@@ -100,7 +103,7 @@ def qemu_command(args, disk: Path, sock: Path, accel: str) -> list[str]:
         "-device", "virtio-serial-pci",
         "-chardev", f"socket,id=out,path={sock}",
         "-device", "virtserialport,chardev=out,name=out",
-        "-serial", "stdio" if args.verbose else "null",
+        "-serial", "stdio",
     ]
 
 
@@ -109,11 +112,17 @@ def die_with_parent() -> None:
     ctypes.CDLL(None).prctl(PR_SET_PDEATHSIG, signal.SIGKILL)
 
 
-def relay_console(stream) -> None:
-    """Copy guest console output to stderr, dropping control characters."""
-    for line in iter(stream.readline, b""):
+def relay_console(stream, tail: collections.deque, verbose: bool) -> None:
+    """Keep the last guest console lines, dropping control characters.
+
+    With verbose, also copy every line to stderr.
+    """
+    for line in iter(lambda: stream.readline(CONSOLE_LINE_MAX), b""):
         clean = bytes(c if 0x20 <= c < 0x7F or c == 0x09 else 0x3F for c in line.rstrip(b"\r\n"))
-        sys.stderr.write("guest: " + clean.decode("ascii") + "\n")
+        text = clean.decode("ascii")
+        tail.append(text)
+        if verbose:
+            sys.stderr.write("guest: " + text + "\n")
 
 
 def accept(server: socket.socket, qemu: subprocess.Popen) -> socket.socket:
@@ -151,11 +160,12 @@ def convert(src: Path, dst: Path, args) -> int:
         qemu = subprocess.Popen(
             qemu_command(args, disk, sock, accel),
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE if args.verbose else subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
             preexec_fn=die_with_parent,
         )
-        if args.verbose:
-            threading.Thread(target=relay_console, args=(qemu.stdout,), daemon=True).start()
+        console: collections.deque = collections.deque(maxlen=CONSOLE_TAIL)
+        relay = threading.Thread(target=relay_console, args=(qemu.stdout, console, args.verbose), daemon=True)
+        relay.start()
 
         timed_out = threading.Event()
 
@@ -174,6 +184,7 @@ def convert(src: Path, dst: Path, args) -> int:
             if args.verbose:
                 print(f"vm-convert-pdf: page {index + 1} {width}x{height}", file=sys.stderr)
 
+        error = None
         try:
             conn = accept(server, qemu)
             with conn, conn.makefile("rb") as stream:
@@ -184,16 +195,20 @@ def convert(src: Path, dst: Path, args) -> int:
                     on_page=on_page,
                 )
         except protocol.ProtocolError as e:
-            if timed_out.is_set():
-                raise ConversionError(f"timed out after {args.timeout:g}s") from None
-            raise ConversionError(f"rejected output from VM: {e}") from None
-        except protocol.GuestError as e:
-            raise ConversionError(str(e)) from None
+            error = f"timed out after {args.timeout:g}s" if timed_out.is_set() else f"rejected output from VM: {e}"
+        except (protocol.GuestError, ConversionError) as e:
+            error = str(e)
         finally:
             watchdog.cancel()
             qemu.kill()
             qemu.wait()
             server.close()
+            relay.join(2)
+
+        if error:
+            if console and not args.verbose:
+                error += "\nlast lines of the guest console:\n" + "\n".join("  " + line for line in console)
+            raise ConversionError(error)
 
         partial = dst.with_name(f".{dst.name}.partial")
         try:

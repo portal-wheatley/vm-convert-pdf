@@ -27,14 +27,14 @@
       apps = forAllSystems (pkgs: {
         default = {
           type = "app";
-          program = "${self.packages.${pkgs.system}.default}/bin/vm-convert-pdf";
+          program = "${self.packages.${pkgs.stdenv.hostPlatform.system}.default}/bin/vm-convert-pdf";
         };
       });
 
       checks = forAllSystems (pkgs: {
-        package = self.packages.${pkgs.system}.default;
+        package = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
         end-to-end = pkgs.callPackage ./tests/end-to-end.nix {
-          vm-convert-pdf = self.packages.${pkgs.system}.default;
+          vm-convert-pdf = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
         };
       });
 

@@ -44,11 +44,14 @@ runCommand "vm-convert-pdf-end-to-end"
     done
 
     head -c 4096 /dev/urandom > garbage.pdf
-    if vm-convert-pdf garbage.pdf; then
+    if vm-convert-pdf garbage.pdf 2> garbage.err; then
       echo "garbage input was accepted" >&2
       exit 1
     fi
+    cat garbage.err
     test ! -e garbage.trusted.pdf
+    # Failures must carry the guest's own explanation from its console.
+    grep -q 'guest: cannot open PDF' garbage.err
 
     if vm-convert-pdf input.pdf; then
       echo "existing output was overwritten without --force" >&2
